@@ -17,7 +17,7 @@ require(knitr)
 require(shinydashboard)
 
 
-
+defaultURL <- 'http://www.trademe.co.nz/browse/categoryattributesearchresults.aspx?searchregion=2&cid=268&search=1&nofilters=1&originalsidebar=1&key=653340931&page=2&sort_order=motors_default&rptpath=1-268-'
 
 
 
@@ -26,13 +26,13 @@ require(shinydashboard)
 ui <- dashboardPage(
   dashboardHeader(),
   dashboardSidebar(
-            textInput('URL', "Enter URL of Search", value = "", width = NULL, placeholder = NULL),
+            textInput('URL', "Enter URL of Search", value = defaultURL, width = NULL, placeholder = NULL),
             textInput('PAGES', "Enter number of search result pages", value = "", width = NULL, placeholder = NULL),
             sliderInput("param_price_weighting", "Price Weighting:",
                         min = 0.01, max = 1, value = c(0.6,1)),
             sliderInput("param_year_weighting", "Year Weighting:",
                         min = 0.01, max = 1, value = c(0.3,0.7)),
-            sliderInput("param_odo_weighting", "Odomoter Weighting:",
+            sliderInput("param_odo_weighting", "Odometer Weighting:",
                         min = 0.01, max = 1, value = c(0.01,0.4)),
             submitButton("Submit")
     
@@ -58,6 +58,7 @@ server <- function(input, output) {
     webpage  <- htmlParse(theURL)
     title    <- xpathSApply(webpage, "//*/div[@class='listingTitle']", xmlValue)
     titleurl <- xpathSApply(webpage, "//*/div[@class='listingTitle']/a", xmlGetAttr, 'href')
+    titleurl <- unique(titleurl)
     titleurl <- paste0("http://www.trademe.co.nz/", titleurl)
     
     title    <- gsub("[\r\n +\"+]", "", title)
@@ -68,13 +69,14 @@ server <- function(input, output) {
     location <- gsub(",.*$", "", location)
     odometer <- data.frame(odo_data = subset(odometer, grepl("^([1-90-9\\<\\>])",odometer)))
     odometer <- odometer %>% 
-      separate(odo_data, c('odo1', 'odo2', 'vehicle_type', 'engine', 'gearbox'), sep = ',') %>% 
+      separate(odo_data, c('odo1', 'odo2', 'vehicle_type', 'engine', 'gearbox'), sep = ',', fill='right') %>% 
       mutate(odometer = (as.numeric(odo1) * 1000) + as.numeric(gsub("km", "", odo2))) %>%
       select(odometer, vehicle_type, engine, gearbox)
     
     price  <- xpathSApply(webpage, "//*/div[@class='listingPrice']", xmlValue)
     price  <- gsub("[\r\n +\"+]", "", price)
     price  <- as.numeric(gsub("[a-zA-Z\\,\\$]", "", price))
+    price <- ifelse(price < 1000, price * 10, price)
     results <- cbind(title, year, odometer, price, location, titleurl)
     
     return(results)
@@ -97,10 +99,9 @@ server <- function(input, output) {
   }
   
   getWeightedRanks <- function(df, trial){
-    weightings    <- runif(3, 1, 100)  # I started with all metrics having same range
-    weightings[1] <- runif(1, input$param_price_weighting[1], input$param_price_weighting[2])   # but then realised I valued price > odometer > year
+    weightings[3] <- runif(1, input$param_price_weighting[1], input$param_price_weighting[2])   
     weightings[2] <- runif(1, input$param_odo_weighting[1], input$param_odo_weighting[2])
-    weightings[3] <- runif(1, input$param_year_weighting[1], input$param_year_weighting[2])
+    weightings[1] <- runif(1, input$param_year_weighting[1], input$param_year_weighting[2])
     rankSet <- df %>% 
       filter(price <= 15000) %>% 
       mutate(rankYear = dense_rank(desc(year)),
@@ -108,7 +109,7 @@ server <- function(input, output) {
              rankPrice = dense_rank(price)) %>% 
       select(title, odometer, rankYear, rankOdometer, rankPrice)
     df$trialNum <- trial
-    df$weightedRank <- rowSums(rankSet[, 2:4] * weightings, na.rm=T) / sum(weightings)
+    df$weightedRank <- rowSums(rankSet[, 3:5] * weightings, na.rm=T) / sum(weightings)
     return(df)
   }
   
@@ -126,17 +127,6 @@ server <- function(input, output) {
     }
     return(Results)
   }
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
   
   
   
@@ -174,9 +164,8 @@ server <- function(input, output) {
             filter(odometer > 0) %>%
             mutate(titleurl = paste0("<a href='",titleurl,"'>","link","</a>")) %>% 
             group_by(title, odometer, price, year, location, titleurl) %>%
-            summarise(medRank = median(weightedRank)) %>%
-            arrange(medRank) %>%
-            top_n(20)
+            summarise(medRank = mean(weightedRank)) %>%
+            arrange(medRank) 
     }, escape = FALSE)
     
 }
